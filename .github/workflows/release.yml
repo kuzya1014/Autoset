@@ -1,0 +1,96 @@
+name: Build and release AutoSet
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: NuGet/setup-nuget@v2
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Download Tekla Structures 2025 Open API assemblies
+        shell: pwsh
+        run: |
+          $packages = Join-Path $env:RUNNER_TEMP 'tekla-packages'
+          $references = Join-Path $env:RUNNER_TEMP 'tekla-references'
+          New-Item -ItemType Directory -Force -Path $packages, $references | Out-Null
+          $names = @(
+            'Tekla.Structures', 'Tekla.Structures.Catalogs',
+            'Tekla.Structures.Datatype', 'Tekla.Structures.Dialog',
+            'Tekla.Structures.Drawing', 'Tekla.Structures.Model',
+            'Tekla.Structures.Plugins'
+          )
+          foreach ($name in $names) {
+            nuget install $name -Version 2025.0.0 -OutputDirectory $packages -Source https://api.nuget.org/v3/index.json -NonInteractive
+            if ($LASTEXITCODE -ne 0) { throw "NuGet install failed: $name" }
+            $dll = Join-Path $packages "$name.2025.0.0/lib/net48/$name.dll"
+            if (-not (Test-Path $dll)) { throw "Missing Tekla assembly: $dll" }
+            Copy-Item -LiteralPath $dll -Destination $references
+          }
+          "TEKLA_BIN_PATH=$references" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Set build version
+        shell: pwsh
+        run: |
+          $version = "1.1.$($env:GITHUB_RUN_NUMBER).0"
+          if ([int]$env:GITHUB_RUN_NUMBER -gt 65535) { throw 'Build number exceeds .NET version component limit' }
+          $path = 'AutoSet/Properties/AssemblyInfo.cs'
+          $source = [System.IO.File]::ReadAllText($path)
+          $source = [regex]::Replace($source, 'AssemblyVersion\("[^"]+"\)', "AssemblyVersion(`"$version`")")
+          $source = [regex]::Replace($source, 'AssemblyFileVersion\("[^"]+"\)', "AssemblyFileVersion(`"$version`")")
+          [System.IO.File]::WriteAllText($path, $source)
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build Release
+        shell: pwsh
+        run: |
+          msbuild AutoSet.sln /t:Build /p:Configuration=Release /p:Platform="Any CPU" /p:TeklaBinPath="$env:TEKLA_BIN_PATH" /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'MSBuild failed' }
+          $exe = 'AutoSet/bin/Release/AutoSet.exe'
+          if (-not (Test-Path $exe)) { throw 'Build did not produce AutoSet.exe' }
+          $built = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $exe)).FileVersion
+          if ($built -ne $env:RELEASE_VERSION) { throw "Wrong EXE version: $built" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AutoSet
+          path: AutoSet/bin/Release/AutoSet.exe
+          if-no-files-found: error
+
+  release:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: windows-2022
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: AutoSet
+          path: dist
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: kuzya1014/Autoset
+        shell: pwsh
+        run: |
+          $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path 'dist/AutoSet.exe')).FileVersion
+          $tag = "v$version"
+          $asset = 'dist/AutoSet.exe#AutoSet.exe'
+          gh release view $tag --json id *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $asset --clobber
+          } else {
+            gh release create $tag $asset --target $env:GITHUB_SHA --title "AutoSet $version" --notes "Automatic build from commit $env:GITHUB_SHA"
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release failed' }
