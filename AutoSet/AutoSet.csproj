@@ -103,6 +103,12 @@
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="UpdateService.cs" />
+    <Compile Include="EmbeddedDependencies.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(EmbedTeklaDependencies)' == 'true'">
+    <EmbeddedResource Include="$(TeklaBinPath)\*.dll">
+      <LogicalName>AutoSet.Dependencies.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Properties\AssemblyInfo.cs">

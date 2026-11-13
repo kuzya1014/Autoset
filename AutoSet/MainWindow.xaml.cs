@@ -34,7 +34,7 @@ namespace AutoSet
 
         void ExportDWG()
         {
-            TSM.Operations.Operation.RunMacro(@"..\drawings\ESD DWG Export.cs");
+            RunRequiredMacro(@"..\drawings\ESD DWG Export.cs");
 
             //string SetFolder = myTextBox.Text.ToString();
             //SetFolder = SetFolder.Replace(@"\", @"\\");
@@ -112,7 +112,7 @@ namespace AutoSet
               
         void PrintPDF()
         {
-            TSM.Operations.Operation.RunMacro(@"..\drawings\ESD PDF Print.cs");
+            RunRequiredMacro(@"..\drawings\ESD PDF Print.cs");
             //string SetFolder0 = myTextBox.Text.ToString();
             //string SetFolder = SetFolder0 + @"\\";
             //string SetFolderPDF = SetFolder + @"PDF\\";
@@ -280,7 +280,13 @@ namespace AutoSet
 
         void ConvertDSTV()
         {
-            TSM.Operations.Operation.RunMacro(@"..\modeling\ESD DSTV to DXF EIW.cs");
+            RunRequiredMacro(@"..\modeling\ESD DSTV to DXF EIW.cs");
+        }
+
+        private void RunRequiredMacro(string fileName)
+        {
+            if (!Operation.RunMacro(fileName))
+                throw new InvalidOperationException("Tekla не запустила макрос: " + fileName);
         }
 
         public bool IsDirectoryEmpty(string path)
@@ -299,6 +305,24 @@ namespace AutoSet
         
         private void Button_Click_1(object sender, RoutedEventArgs e)
         {
+            try
+            {
+                CreateSet();
+            }
+            catch (Exception error)
+            {
+                var cause = error.GetBaseException();
+                var missingDependency = cause is FileNotFoundException || cause is FileLoadException ||
+                    cause is TypeLoadException || cause is BadImageFormatException;
+                MessageBox.Show(this,
+                    "Не удалось создать комплект: " + cause.Message +
+                    (missingDependency ? "\n\nЗапускайте AutoSet из папки, где находятся DLL Tekla Structures 2025." : ""),
+                    "Ошибка AutoSet", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void CreateSet()
+        {
             // PrintAttributes
             //TSD.DPMPrinterAttributes printAttributes = new TSD.DPMPrinterAttributes();
             //printAttributes.ColorMode = TSD.DotPrintColor.BlackAndWhite;
@@ -314,8 +338,12 @@ namespace AutoSet
 
             //string pdfName = "";
             var myModel = new TSM.Model();
+            if (!myModel.GetConnectionStatus())
+                throw new InvalidOperationException("Нет соединения с открытой моделью Tekla Structures.");
             var myModelInfo = myModel.GetInfo();
-            var myModelPath = myModelInfo.ModelPath.ToString();
+            if (myModelInfo == null || String.IsNullOrWhiteSpace(myModelInfo.ModelPath))
+                throw new InvalidOperationException("Не удалось определить папку модели Tekla Structures.");
+            var myModelPath = myModelInfo.ModelPath;
 
             string PdffilePath = myModelPath + @"\PDF\";
             string PlotfilePath = myModelPath + @"\Plotfiles\";
@@ -389,19 +417,7 @@ namespace AutoSet
                     System.IO.File.Delete(File2);
             }
 
-            if (CheckDWG.IsChecked == true & CheckPDF.IsChecked == true)
-            {
-                double DwgQuantity = 0;
-                double PdfQuantity = 1;
-
-                do
-                {
-                    DwgQuantity = Directory.GetFiles(SetFolderDWG).Length;
-                    PdfQuantity = Directory.GetFiles(SetFolderPDF).Length;
-                }
-                while (PdfQuantity != DwgQuantity);
-            }
-            MessageBox.Show(this, "Set Created!");
+            MessageBox.Show(this, "Команды создания комплекта отправлены в Tekla. Проверьте файлы в папке _Set.");
             System.Diagnostics.Process.Start(SetFolder);
             this.Close();
         }

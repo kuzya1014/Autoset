@@ -2,7 +2,7 @@ name: Build and release AutoSet
 
 on:
   push:
-    branches: [master]
+    branches: [master, 'codex/**']
   pull_request:
     branches: [master]
   workflow_dispatch:
@@ -31,11 +31,19 @@ jobs:
             'Tekla.Structures.Plugins'
           )
           foreach ($name in $names) {
-            nuget install $name -Version 2025.0.0 -OutputDirectory $packages -Source https://api.nuget.org/v3/index.json -NonInteractive
+            nuget install $name -Version 2025.0.0 -Framework net48 -OutputDirectory $packages -Source https://api.nuget.org/v3/index.json -NonInteractive
             if ($LASTEXITCODE -ne 0) { throw "NuGet install failed: $name" }
             $dll = Join-Path $packages "$name.2025.0.0/lib/net48/$name.dll"
             if (-not (Test-Path $dll)) { throw "Missing Tekla assembly: $dll" }
             Copy-Item -LiteralPath $dll -Destination $references
+          }
+          foreach ($framework in @('net48', 'net47', 'net46', 'net45', 'net', 'netstandard2.0')) {
+            Get-ChildItem -Path $packages -Recurse -Filter '*.dll' |
+              Where-Object { $_.DirectoryName -like "*\lib\$framework" } |
+              ForEach-Object {
+                $destination = Join-Path $references $_.Name
+                if (-not (Test-Path $destination)) { Copy-Item -LiteralPath $_.FullName -Destination $destination }
+              }
           }
           "TEKLA_BIN_PATH=$references" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
@@ -54,12 +62,23 @@ jobs:
       - name: Build Release
         shell: pwsh
         run: |
-          msbuild AutoSet.sln /t:Build /p:Configuration=Release /p:Platform="Any CPU" /p:TeklaBinPath="$env:TEKLA_BIN_PATH" /v:minimal
+          msbuild AutoSet.sln /t:Build /p:Configuration=Release /p:Platform="Any CPU" /p:TeklaBinPath="$env:TEKLA_BIN_PATH" /p:EmbedTeklaDependencies=true /v:minimal
           if ($LASTEXITCODE -ne 0) { throw 'MSBuild failed' }
           $exe = 'AutoSet/bin/Release/AutoSet.exe'
           if (-not (Test-Path $exe)) { throw 'Build did not produce AutoSet.exe' }
           $built = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $exe)).FileVersion
           if ($built -ne $env:RELEASE_VERSION) { throw "Wrong EXE version: $built" }
+          if ((Get-Item $exe).Length -lt 2MB) { throw 'EXE does not appear to contain Tekla dependencies' }
+
+      - name: Verify bundled Tekla assemblies
+        shell: powershell
+        run: |
+          $exe = (Resolve-Path 'AutoSet/bin/Release/AutoSet.exe').Path
+          $resources = [Reflection.Assembly]::ReflectionOnlyLoadFrom($exe).GetManifestResourceNames()
+          foreach ($name in @('Tekla.Structures.dll', 'Tekla.Structures.Model.dll', 'Tekla.Structures.Drawing.dll')) {
+            if ($resources -notcontains "AutoSet.Dependencies.$name") { throw "EXE is missing embedded assembly: $name" }
+          }
+          Write-Host "Embedded managed assemblies: $(($resources | Where-Object { $_ -like 'AutoSet.Dependencies.*.dll' }).Count)"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -68,7 +87,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
     needs: build
     runs-on: windows-2022
     permissions:
