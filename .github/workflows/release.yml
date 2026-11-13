@@ -39,7 +39,7 @@ jobs:
           }
           foreach ($framework in @('net48', 'net47', 'net46', 'net45', 'net', 'netstandard2.0')) {
             Get-ChildItem -Path $packages -Recurse -Filter '*.dll' |
-              Where-Object { $_.DirectoryName -like "*\lib\$framework" -and $_.Name -notmatch '^(System|Microsoft)\.' } |
+              Where-Object { $_.DirectoryName -like "*\lib\$framework" } |
               ForEach-Object {
                 $destination = Join-Path $references $_.Name
                 if (-not (Test-Path $destination)) { Copy-Item -LiteralPath $_.FullName -Destination $destination }
