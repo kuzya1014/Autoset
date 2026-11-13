@@ -70,6 +70,16 @@ jobs:
           if ($built -ne $env:RELEASE_VERSION) { throw "Wrong EXE version: $built" }
           if ((Get-Item $exe).Length -lt 2MB) { throw 'EXE does not appear to contain Tekla dependencies' }
 
+      - name: Verify bundled Tekla assemblies
+        shell: powershell
+        run: |
+          $exe = (Resolve-Path 'AutoSet/bin/Release/AutoSet.exe').Path
+          $resources = [Reflection.Assembly]::ReflectionOnlyLoadFrom($exe).GetManifestResourceNames()
+          foreach ($name in @('Tekla.Structures.dll', 'Tekla.Structures.Model.dll', 'Tekla.Structures.Drawing.dll')) {
+            if ($resources -notcontains "AutoSet.Dependencies.$name") { throw "EXE is missing embedded assembly: $name" }
+          }
+          Write-Host "Embedded managed assemblies: $(($resources | Where-Object { $_ -like 'AutoSet.Dependencies.*.dll' }).Count)"
+
       - uses: actions/upload-artifact@v4
         with:
           name: AutoSet
