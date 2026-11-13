@@ -31,11 +31,19 @@ jobs:
             'Tekla.Structures.Plugins'
           )
           foreach ($name in $names) {
-            nuget install $name -Version 2025.0.0 -OutputDirectory $packages -Source https://api.nuget.org/v3/index.json -NonInteractive
+            nuget install $name -Version 2025.0.0 -Framework net48 -OutputDirectory $packages -Source https://api.nuget.org/v3/index.json -NonInteractive
             if ($LASTEXITCODE -ne 0) { throw "NuGet install failed: $name" }
             $dll = Join-Path $packages "$name.2025.0.0/lib/net48/$name.dll"
             if (-not (Test-Path $dll)) { throw "Missing Tekla assembly: $dll" }
             Copy-Item -LiteralPath $dll -Destination $references
+          }
+          foreach ($framework in @('net48', 'net47', 'net46', 'net45', 'net', 'netstandard2.0')) {
+            Get-ChildItem -Path $packages -Recurse -Filter '*.dll' |
+              Where-Object { $_.DirectoryName -like "*\lib\$framework" -and $_.Name -notmatch '^(System|Microsoft)\.' } |
+              ForEach-Object {
+                $destination = Join-Path $references $_.Name
+                if (-not (Test-Path $destination)) { Copy-Item -LiteralPath $_.FullName -Destination $destination }
+              }
           }
           "TEKLA_BIN_PATH=$references" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
@@ -54,31 +62,18 @@ jobs:
       - name: Build Release
         shell: pwsh
         run: |
-          msbuild AutoSet.sln /t:Build /p:Configuration=Release /p:Platform="Any CPU" /p:TeklaBinPath="$env:TEKLA_BIN_PATH" /v:minimal
+          msbuild AutoSet.sln /t:Build /p:Configuration=Release /p:Platform="Any CPU" /p:TeklaBinPath="$env:TEKLA_BIN_PATH" /p:EmbedTeklaDependencies=true /v:minimal
           if ($LASTEXITCODE -ne 0) { throw 'MSBuild failed' }
           $exe = 'AutoSet/bin/Release/AutoSet.exe'
           if (-not (Test-Path $exe)) { throw 'Build did not produce AutoSet.exe' }
           $built = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $exe)).FileVersion
           if ($built -ne $env:RELEASE_VERSION) { throw "Wrong EXE version: $built" }
-          $output = 'AutoSet/bin/Release'
-          Get-ChildItem -Path $env:TEKLA_BIN_PATH -Filter '*.dll' | Copy-Item -Destination $output -Force
-          $packages = Join-Path $env:RUNNER_TEMP 'tekla-packages'
-          foreach ($framework in @('net48', 'net47', 'net46', 'net45', 'net', 'netstandard2.0')) {
-            Get-ChildItem -Path $packages -Recurse -Filter '*.dll' |
-              Where-Object { $_.DirectoryName -like "*\lib\$framework" -and $_.Name -notmatch '^(System|Microsoft)\.' } |
-              ForEach-Object {
-                $destination = Join-Path $output $_.Name
-                if (-not (Test-Path $destination)) { Copy-Item -LiteralPath $_.FullName -Destination $destination }
-              }
-          }
-          Compress-Archive -Path "$output/*" -DestinationPath 'AutoSet-windows.zip' -Force
+          if ((Get-Item $exe).Length -lt 2MB) { throw 'EXE does not appear to contain Tekla dependencies' }
 
       - uses: actions/upload-artifact@v4
         with:
           name: AutoSet
-          path: |
-            AutoSet/bin/Release/AutoSet.exe
-            AutoSet-windows.zip
+          path: AutoSet/bin/Release/AutoSet.exe
           if-no-files-found: error
 
   release:
@@ -101,11 +96,10 @@ jobs:
           $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path 'dist/AutoSet.exe')).FileVersion
           $tag = "v$version"
           $asset = 'dist/AutoSet.exe#AutoSet.exe'
-          $archive = 'dist/AutoSet-windows.zip#AutoSet-windows.zip'
           gh release view $tag --json id *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $asset $archive --clobber
+            gh release upload $tag $asset --clobber
           } else {
-            gh release create $tag $asset $archive --target $env:GITHUB_SHA --title "AutoSet $version" --notes "Automatic build from commit $env:GITHUB_SHA"
+            gh release create $tag $asset --target $env:GITHUB_SHA --title "AutoSet $version" --notes "Automatic build from commit $env:GITHUB_SHA"
           }
           if ($LASTEXITCODE -ne 0) { throw 'GitHub release failed' }

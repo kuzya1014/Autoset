@@ -15,6 +15,17 @@ namespace AutoSet
     {
         protected override async void OnStartup(StartupEventArgs e)
         {
+            try
+            {
+                EmbeddedDependencies.Initialize();
+            }
+            catch (Exception error)
+            {
+                MessageBox.Show("Не удалось подготовить библиотеки AutoSet: " + error.Message,
+                    "Ошибка AutoSet", MessageBoxButton.OK, MessageBoxImage.Error);
+                Shutdown();
+                return;
+            }
             base.OnStartup(e);
             await UpdateService.CheckForUpdatesAsync();
         }
