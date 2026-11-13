@@ -60,11 +60,25 @@ jobs:
           if (-not (Test-Path $exe)) { throw 'Build did not produce AutoSet.exe' }
           $built = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $exe)).FileVersion
           if ($built -ne $env:RELEASE_VERSION) { throw "Wrong EXE version: $built" }
+          $output = 'AutoSet/bin/Release'
+          Get-ChildItem -Path $env:TEKLA_BIN_PATH -Filter '*.dll' | Copy-Item -Destination $output -Force
+          $packages = Join-Path $env:RUNNER_TEMP 'tekla-packages'
+          foreach ($framework in @('net48', 'net47', 'net46', 'net45', 'net', 'netstandard2.0')) {
+            Get-ChildItem -Path $packages -Recurse -Filter '*.dll' |
+              Where-Object { $_.DirectoryName -like "*\lib\$framework" -and $_.Name -notmatch '^(System|Microsoft)\.' } |
+              ForEach-Object {
+                $destination = Join-Path $output $_.Name
+                if (-not (Test-Path $destination)) { Copy-Item -LiteralPath $_.FullName -Destination $destination }
+              }
+          }
+          Compress-Archive -Path "$output/*" -DestinationPath 'AutoSet-windows.zip' -Force
 
       - uses: actions/upload-artifact@v4
         with:
           name: AutoSet
-          path: AutoSet/bin/Release/AutoSet.exe
+          path: |
+            AutoSet/bin/Release/AutoSet.exe
+            AutoSet-windows.zip
           if-no-files-found: error
 
   release:
@@ -87,10 +101,11 @@ jobs:
           $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path 'dist/AutoSet.exe')).FileVersion
           $tag = "v$version"
           $asset = 'dist/AutoSet.exe#AutoSet.exe'
+          $archive = 'dist/AutoSet-windows.zip#AutoSet-windows.zip'
           gh release view $tag --json id *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $asset --clobber
+            gh release upload $tag $asset $archive --clobber
           } else {
-            gh release create $tag $asset --target $env:GITHUB_SHA --title "AutoSet $version" --notes "Automatic build from commit $env:GITHUB_SHA"
+            gh release create $tag $asset $archive --target $env:GITHUB_SHA --title "AutoSet $version" --notes "Automatic build from commit $env:GITHUB_SHA"
           }
           if ($LASTEXITCODE -ne 0) { throw 'GitHub release failed' }
